@@ -147,6 +147,8 @@ class Bridge(QObject):
         def result(data):
             exited, status = data
             self._update(running=list(self.apps.running), activeApp=self.apps.active)
+            if not self.apps.active and self._return_page == "application":
+                self._return_page = "home"
             if status:
                 self._status(status)
             if self._text_target and any(app_id == self._text_target.app_id for app_id, _ in exited):
@@ -473,7 +475,7 @@ class Bridge(QObject):
             was_typing = self._typing
             finished()
             if was_typing:
-                self._page("quick")
+                self._page("home" if target.app.process.poll() is not None else "quick")
         self._job(lambda: self.apps.insert_text(target, text, enter), finished, on_error=failed)
 
     def _list(self, section, rows):

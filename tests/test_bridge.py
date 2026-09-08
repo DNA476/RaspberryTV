@@ -112,13 +112,17 @@ class KeyboardStateTests(unittest.TestCase):
                 self.assertFalse((Path(self.directory.name) / "settings.json").exists())
 
     def test_send_error_clears_buffer_and_requires_new_target(self):
-        self.open_keyboard()
-        with patch.object(self.bridge, "_need_pi"), patch.object(self.bridge.apps, "insert_text", side_effect=Unavailable("Ввод остановлен")), patch("raspberry_tv.bridge.LOG.exception"):
-            self.bridge.action("editor_save", "private-buffer")
-            self.wait()
-        self.assertEqual(self.bridge.state["page"], "quick")
-        self.assertEqual(self.bridge.state["editor"], {})
-        self.assertFalse(self.bridge.state["keyboardAvailable"])
+        for closed in (False, True):
+            with self.subTest(closed=closed):
+                self.bridge._page("application")
+                self.open_keyboard()
+                self.target.app.process.poll.return_value = 0 if closed else None
+                with patch.object(self.bridge, "_need_pi"), patch.object(self.bridge.apps, "insert_text", side_effect=Unavailable("Ввод остановлен")), patch("raspberry_tv.bridge.LOG.exception"):
+                    self.bridge.action("editor_save", "private-buffer")
+                    self.wait()
+                self.assertEqual(self.bridge.state["page"], "home" if closed else "quick")
+                self.assertEqual(self.bridge.state["editor"], {})
+                self.assertFalse(self.bridge.state["keyboardAvailable"])
 
     def test_home_cancels_active_delivery_and_late_callback_cannot_restore_editor(self):
         self.open_keyboard()
