@@ -5,7 +5,7 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
-from raspberry_tv.config import DEFAULTS, Settings, normalize_domains, validate
+from raspberry_tv.config import DEFAULTS, Settings, normalize_domains, normalize_url, validate
 from raspberry_tv.input import InputReader
 from raspberry_tv.linux import parse_outputs, split_nmcli
 from raspberry_tv.processes import app_command, Unavailable
@@ -68,8 +68,50 @@ class SettingsTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             validate(data)
 
+    def test_old_settings_gain_browser_default_without_losing_network_config(self):
+        data = deepcopy(DEFAULTS)
+        del data["browser"]
+        data["zapret"]["interface"] = "wlan0"
+        data["scale"] = "large"
+        restored = validate(data)
+        self.assertEqual(restored["browser"], DEFAULTS["browser"])
+        self.assertEqual(restored["zapret"], data["zapret"])
+        self.assertEqual(restored["scale"], "large")
+
 
 class ValidationTests(unittest.TestCase):
+    def test_browser_addresses_support_https_idn_and_local_networks(self):
+        for value, expected in {
+            "Example.org/path?q=tv#video": "https://example.org/path?q=tv#video",
+            " пример.рф ": "https://xn--e1afmkfd.xn--p1ai/",
+            "http://localhost:8080": "http://localhost:8080/",
+            "raspberrypi.local:8080/info": "https://raspberrypi.local:8080/info",
+            "http://[::1]:8080/": "http://[::1]:8080/",
+            "example.org/я?q=ю": "https://example.org/%D1%8F?q=%D1%8E",
+        }.items():
+            with self.subTest(value=value):
+                self.assertEqual(normalize_url(value), expected)
+
+    def test_browser_rejects_non_web_schemes_credentials_and_invalid_hosts(self):
+        for value in ("", "javascript:alert(1)", "data:text/html,hello", "file:///etc/passwd", "chrome://settings",
+                      "--no-sandbox", "https://user:secret@example.org", "https:///missing", "https://bad_name.org",
+                      "https://example.org:invalid", "example.org\nfile:///etc/passwd", "example.org\\@other.org", "https://[bad]/"):
+            with self.subTest(value=value), self.assertRaises(ValueError):
+                normalize_url(value)
+
+    def test_browser_profile_is_separate_and_start_page_is_validated(self):
+        with patch("raspberry_tv.processes.shutil.which", return_value="/usr/bin/chromium"):
+            browser = app_command("browser", Path("state"), "example.org")
+            youtube = app_command("youtube", Path("state"))
+            with self.assertRaises(ValueError):
+                app_command("browser", Path("state"), "file:///etc/passwd")
+        self.assertEqual(browser[-1], "https://example.org/")
+        self.assertIn("--start-fullscreen", browser)
+        self.assertNotIn("--kiosk", browser)
+        self.assertNotIn("--no-sandbox", browser)
+        profile = lambda argv: next(x for x in argv if x.startswith("--user-data-dir="))
+        self.assertNotEqual(profile(browser), profile(youtube))
+
     def test_domains_normalize_deduplicate_and_support_idn(self):
         self.assertEqual(normalize_domains("YouTube.com\nyoutube.com,пример.рф;ytimg.com."),
                          ["youtube.com", "xn--e1afmkfd.xn--p1ai", "ytimg.com"])

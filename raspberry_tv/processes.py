@@ -9,14 +9,16 @@ import signal
 import subprocess
 import time
 
+from .config import DEFAULTS, normalize_url
+
 class Unavailable(RuntimeError):
     pass
 
 
-def run(argv: list[str], timeout: float = 12, check: bool = True) -> str:
+def run(argv: list[str], timeout: float = 12, check: bool = True, *, input_text: str | None = None) -> str:
     try:
         result = subprocess.run(argv, capture_output=True, text=True, encoding="utf-8", errors="replace",
-                                timeout=timeout, env={**os.environ, "LC_ALL": "C"}, check=False)
+                                timeout=timeout, env={**os.environ, "LC_ALL": "C"}, check=False, input=input_text)
     except FileNotFoundError as exc:
         raise Unavailable(f"Не установлен компонент {Path(argv[0]).name}") from exc
     except subprocess.TimeoutExpired as exc:
@@ -27,13 +29,13 @@ def run(argv: list[str], timeout: float = 12, check: bool = True) -> str:
     return result.stdout.strip()
 
 
-def app_command(app_id: str, state_dir: Path) -> list[str]:
-    if app_id == "youtube":
-        url = "https://www.youtube.com/"
+def app_command(app_id: str, state_dir: Path, start_url: str | None = None) -> list[str]:
+    if app_id in ("youtube", "browser"):
+        url = "https://www.youtube.com/" if app_id == "youtube" else normalize_url(start_url or DEFAULTS["browser"]["start_url"])
         chromium = shutil.which("chromium") or shutil.which("chromium-browser")
         if not chromium:
             raise Unavailable("Chromium ещё не установлен")
-        return [chromium, "--kiosk", "--no-first-run", "--no-default-browser-check",
+        return [chromium, "--kiosk" if app_id == "youtube" else "--start-fullscreen", "--no-first-run", "--no-default-browser-check",
                 "--disable-session-crashed-bubble", "--ozone-platform=x11",
                 f"--class=raspberrytv-{app_id}", f"--user-data-dir={state_dir / 'browsers' / app_id}", url]
     executable = {"kodi": "kodi", "moonlight": "moonlight"}.get(app_id)
@@ -85,13 +87,13 @@ class Applications:
         self.running: dict[str, RunningApp] = {}
         self.active = ""
 
-    def launch(self, app_id: str) -> None:
+    def launch(self, app_id: str, start_url: str | None = None) -> None:
         existing = self.running.get(app_id)
         if existing and existing.process.poll() is None:
             self.active = app_id
             self.resume()
             return
-        command = app_command(app_id, self.state_dir)
+        command = app_command(app_id, self.state_dir, start_url)
         if app_id == "kodi":
             from .kodi import prepare_cec
             prepare_cec(Path.home() / ".kodi" / "userdata" / "peripheral_data")
@@ -142,6 +144,35 @@ class Applications:
         app = self.running.get(self.active)
         if app and app.window:
             run(["wmctrl", "-ia", app.window])
+
+    def browser_action(self, action: str, value: str = "") -> None:
+        """Drive only our live browser; never type into an unverified foreground window."""
+        keys = {"back": "alt+Left", "forward": "alt+Right", "reload": "ctrl+r", "address": "ctrl+l"}
+        if action not in keys:
+            raise ValueError("Неизвестное действие браузера")
+        url = normalize_url(value) if action == "address" else ""
+        app = self.running.get("browser")
+        if self.active != "browser" or not app or app.process.poll() is not None or not app.window:
+            raise Unavailable("Сначала открой браузер")
+        window = app.window
+        run(["xdotool", "windowactivate", "--sync", window], timeout=3)
+
+        def check_focus():
+            try:
+                focused = int(run(["xdotool", "getactivewindow"])) == int(window, 16)
+            except ValueError:
+                focused = False
+            if not focused or app.process.poll() is not None:
+                raise Unavailable("Браузер потерял фокус. Повтори действие")
+
+        check_focus()
+        run(["xdotool", "key", "--clearmodifiers", keys[action]])
+        if action == "address":
+            check_focus()
+            # stdin keeps entered addresses out of command lines and exception messages.
+            run(["xdotool", "type", "--clearmodifiers", "--delay", "0", "--file", "-"], input_text=url)
+            check_focus()
+            run(["xdotool", "key", "--clearmodifiers", "Return"])
 
     def wait_ready(self, app_id: str, timeout: float = 20) -> None:
         deadline = time.monotonic() + timeout
