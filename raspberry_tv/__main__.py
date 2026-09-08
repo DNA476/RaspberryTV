@@ -123,6 +123,7 @@ def main():
     reader = None
     if not preview:
         reader = InputReader(bridge.settings.data["controller"], bridge.controllerEvent.emit, bridge.controllerStatus.emit)
+        bridge.input_reader = reader
         reader.start()
     surface("home")
     if args.screen not in ("home", "quick", "power"):
