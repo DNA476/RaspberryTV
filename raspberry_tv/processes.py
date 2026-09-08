@@ -15,10 +15,10 @@ class Unavailable(RuntimeError):
     pass
 
 
-def run(argv: list[str], timeout: float = 12, check: bool = True, *, input_text: str | None = None) -> str:
+def run(argv: list[str], timeout: float = 12, check: bool = True) -> str:
     try:
         result = subprocess.run(argv, capture_output=True, text=True, encoding="utf-8", errors="replace",
-                                timeout=timeout, env={**os.environ, "LC_ALL": "C"}, check=False, input=input_text)
+                                timeout=timeout, env={**os.environ, "LC_ALL": "C"}, check=False)
     except FileNotFoundError as exc:
         raise Unavailable(f"Не установлен компонент {Path(argv[0]).name}") from exc
     except subprocess.TimeoutExpired as exc:
@@ -146,9 +146,9 @@ class Applications:
             run(["wmctrl", "-ia", app.window])
 
     def browser_action(self, action: str, value: str = "") -> None:
-        """Drive only our live browser; never type into an unverified foreground window."""
-        keys = {"back": "alt+Left", "forward": "alt+Right", "reload": "ctrl+r", "address": "ctrl+l"}
-        if action not in keys:
+        """Open URLs through Chromium's existing profile; use fixed keys for history."""
+        keys = {"back": "alt+Left", "forward": "alt+Right", "reload": "F5"}
+        if action not in (*keys, "address"):
             raise ValueError("Неизвестное действие браузера")
         url = normalize_url(value) if action == "address" else ""
         app = self.running.get("browser")
@@ -166,13 +166,28 @@ class Applications:
                 raise Unavailable("Браузер потерял фокус. Повтори действие")
 
         check_focus()
-        run(["xdotool", "key", "--clearmodifiers", keys[action]])
         if action == "address":
-            check_focus()
-            # stdin keeps entered addresses out of command lines and exception messages.
-            run(["xdotool", "type", "--clearmodifiers", "--delay", "0", "--file", "-"], input_text=url)
-            check_focus()
-            run(["xdotool", "key", "--clearmodifiers", "Return"])
+            # Ctrl+L is not reliable in the Pi's fullscreen Chromium. Its process
+            # singleton opens the URL in a new tab of our existing profile instead.
+            try:
+                argv = [arg for arg in app_command("browser", self.state_dir, url) if arg != "--start-fullscreen"]
+                request = subprocess.Popen(argv,
+                    stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                    start_new_session=True)
+            except OSError:
+                raise Unavailable("Не удалось передать адрес браузеру") from None
+            try:
+                code = request.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                # If the old browser exits in this interval, do not leave a new,
+                # untracked browser process behind when the request times out.
+                self._terminate(RunningApp(request, None, time.monotonic()))
+                raise Unavailable("Браузер не принял адрес вовремя. Открой его заново") from None
+            if code or app.process.poll() is not None:
+                raise Unavailable("Браузер закрылся или не принял адрес")
+            run(["wmctrl", "-ir", window, "-b", "add,fullscreen"])
+        else:
+            run(["xdotool", "key", "--clearmodifiers", keys[action]])
 
     def wait_ready(self, app_id: str, timeout: float = 20) -> None:
         deadline = time.monotonic() + timeout

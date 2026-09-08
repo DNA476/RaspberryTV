@@ -1,6 +1,7 @@
 from pathlib import Path
 from types import SimpleNamespace
 import unittest
+import subprocess
 from unittest.mock import Mock, patch
 
 from raspberry_tv.processes import Applications, RunningApp, Unavailable
@@ -21,30 +22,40 @@ class BrowserTests(unittest.TestCase):
         resume.assert_called_once()
         self.assertIs(self.apps.running["browser"].process, self.process)
 
-    def test_address_is_typed_only_after_focusing_owned_window(self):
-        calls = []
-        def run(argv, **kwargs):
-            calls.append((argv, kwargs))
-            return "16" if argv[1] == "getactivewindow" else ""
-        with patch("raspberry_tv.processes.run", side_effect=run):
+    def test_address_opens_in_existing_profile_without_synthetic_text_input(self):
+        request = Mock()
+        request.wait.return_value = 0
+        with patch("raspberry_tv.processes.run", return_value="16") as command, \
+                patch("raspberry_tv.processes.shutil.which", return_value="/usr/bin/chromium"), \
+                patch("raspberry_tv.processes.subprocess.Popen", return_value=request) as spawn:
             self.apps.browser_action("address", "example.org/watch?q=test")
-        self.assertEqual(calls[0][0], ["xdotool", "windowactivate", "--sync", "0x10"])
-        typed = [(argv, kwargs) for argv, kwargs in calls if argv[1] == "type"]
-        self.assertEqual(len(typed), 1)
-        self.assertEqual(typed[0][1]["input_text"], "https://example.org/watch?q=test")
-        self.assertNotIn("https://example.org/watch?q=test", typed[0][0])
-        self.assertEqual(calls[-1][0][-1], "Return")
+        argv = spawn.call_args.args[0]
+        self.assertEqual(argv[-1], "https://example.org/watch?q=test")
+        self.assertNotIn("--start-fullscreen", argv)
+        self.assertIn(f"--user-data-dir={Path('state') / 'browsers' / 'browser'}", argv)
+        self.assertFalse(any(call.args[0][1] in ("key", "type") for call in command.call_args_list))
+        self.assertIs(self.apps.running["browser"].process, self.process)
 
-    def test_focus_loss_before_typing_stops_address_and_submit(self):
-        def run(argv, **kwargs):
-            if argv[1] == "getactivewindow":
-                return next(focus)
-            return ""
-        focus = iter(["16", "99"])
-        with patch("raspberry_tv.processes.run", side_effect=run) as command:
+    def test_focus_loss_cancels_browser_action(self):
+        with patch("raspberry_tv.processes.run", return_value="99") as command, \
+                patch("raspberry_tv.processes.subprocess.Popen") as spawn:
             with self.assertRaises(Unavailable):
                 self.apps.browser_action("address", "example.org")
-        self.assertFalse(any(call.args[0][1] == "type" or call.args[0][-1] == "Return" for call in command.call_args_list))
+        spawn.assert_not_called()
+        self.assertFalse(any(call.args[0][1] == "key" for call in command.call_args_list))
+
+    def test_timed_out_url_request_is_terminated_without_logging_address(self):
+        request = Mock()
+        request.wait.side_effect = subprocess.TimeoutExpired(["chromium", "https://example.org/?private=value"], 5)
+        with patch("raspberry_tv.processes.run", return_value="16"), \
+                patch("raspberry_tv.processes.shutil.which", return_value="/usr/bin/chromium"), \
+                patch("raspberry_tv.processes.subprocess.Popen", return_value=request), \
+                patch.object(self.apps, "_terminate") as terminate:
+            with self.assertRaises(Unavailable) as caught:
+                self.apps.browser_action("address", "example.org/?private=value")
+        self.assertIs(terminate.call_args.args[0].process, request)
+        self.assertNotIn("private", str(caught.exception))
+        self.assertTrue(caught.exception.__suppress_context__)
 
     def test_browser_actions_refuse_unowned_or_exited_applications(self):
         with patch("raspberry_tv.processes.run") as command:
@@ -58,7 +69,7 @@ class BrowserTests(unittest.TestCase):
         command.assert_not_called()
 
     def test_history_keys_use_browser_shortcuts(self):
-        for action, key in (("back", "alt+Left"), ("forward", "alt+Right"), ("reload", "ctrl+r")):
+        for action, key in (("back", "alt+Left"), ("forward", "alt+Right"), ("reload", "F5")):
             with self.subTest(action=action), patch("raspberry_tv.processes.run", return_value="16") as command:
                 self.apps.browser_action(action)
                 command.assert_called_with(["xdotool", "key", "--clearmodifiers", key])

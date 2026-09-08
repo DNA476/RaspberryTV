@@ -209,7 +209,7 @@ class Bridge(QObject):
         elif action == "browser_address":
             if self._state["activeApp"] != "browser":
                 raise Unavailable("Сначала открой браузер")
-            self._edit("Открыть сайт", "Адрес с https:// или имя сайта, например example.org", action, "", submit="Открыть")
+            self._edit("Открыть сайт", "Адрес сайта · откроется в новой вкладке", action, "", submit="Открыть")
         elif action == "browser_home":
             self._edit("Стартовая страница браузера", "Открывается при новом запуске браузера", action,
                        self.settings.data["browser"]["start_url"])
@@ -232,15 +232,15 @@ class Bridge(QObject):
                        "\n".join(self.settings.data["zapret"]["domains"]), multiline=True)
         elif action == "profile":
             profiles = [*PROFILES, "Пользовательский"]
-            zapret = deepcopy(self.settings.data["zapret"])
-            zapret["profile"] = profiles[(profiles.index(zapret["profile"]) + 1) % len(profiles)]
-            if zapret["profile"] in PROFILES:
-                zapret["domains"] = PROFILES[zapret["profile"]]
-            self._saved(zapret=zapret)
+            draft = deepcopy(self.settings.data["zapret"])
+            draft["profile"] = profiles[(profiles.index(draft["profile"]) + 1) % len(profiles)]
+            if draft["profile"] in PROFILES:
+                draft["domains"] = PROFILES[draft["profile"]]
+            self._saved(zapret=draft)
         elif action in ("tcp", "udp"):
-            zapret = deepcopy(self.settings.data["zapret"])
-            zapret[action] = not zapret[action]
-            self._saved(zapret=zapret)
+            draft = deepcopy(self.settings.data["zapret"])
+            draft[action] = not draft[action]
+            self._saved(zapret=draft)
         elif action in ("strategy", "interface"):
             self._need_pi()
             key = "strategies" if action == "strategy" else "interfaces"
