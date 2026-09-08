@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<openbox_config xmlns="http://openbox.org/3.4/rc">
+  <focus><focusNew>yes</focusNew><followMouse>no</followMouse></focus>
+  <desktops><number>1</number></desktops>
+  <theme><name>Clearlooks</name><titleLayout></titleLayout></theme>
+  <keyboard>
+    <keybind key="F1"><action name="Execute"><command>/usr/local/bin/raspberry-tv-control home</command></action></keybind>
+    <keybind key="F2"><action name="Execute"><command>/usr/local/bin/raspberry-tv-control menu</command></action></keybind>
+    <keybind key="F3"><action name="Execute"><command>/usr/local/bin/raspberry-tv-control power</command></action></keybind>
+  </keyboard>
+  <mouse></mouse>
+  <applications>
+    <application class="*"><decor>no</decor></application>
+  </applications>
+</openbox_config>

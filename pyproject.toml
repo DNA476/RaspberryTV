@@ -1,0 +1,22 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "raspberry-tv"
+version = "0.1.0"
+description = "A controller-first TV shell for Raspberry Pi 5"
+requires-python = ">=3.11"
+dependencies = ["PySide6-Essentials>=6.8,<7"]
+
+[project.optional-dependencies]
+linux = ["evdev>=1.7,<2; sys_platform == 'linux'", "python-xlib>=0.33,<1; sys_platform == 'linux'"]
+
+[project.scripts]
+raspberry-tv = "raspberry_tv.__main__:main"
+
+[tool.setuptools.packages.find]
+include = ["raspberry_tv*"]
+
+[tool.setuptools.package-data]
+raspberry_tv = ["qml/*.qml"]

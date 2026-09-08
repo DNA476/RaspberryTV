@@ -1,0 +1,14 @@
+{
+  "adapter": {
+    "url": "https://codeload.github.com/Sergeydigl3/zapret-discord-youtube-linux/tar.gz/69db771b527ba11ca71efe28728a7f9491eec352",
+    "sha256": "9c02398c5e0b6dbe593985e01792ca1af8e7c1206b6e8c3c93b51781ab008b38"
+  },
+  "strategies": {
+    "url": "https://codeload.github.com/Flowseal/zapret-discord-youtube/tar.gz/ef19845a801e4e743f7bdfdbd58f9745c6adbd60",
+    "sha256": "9bd06fde016909131d3d07529f4019655ceb9f3e453bd38e229db21c275c323c"
+  },
+  "engine": {
+    "url": "https://github.com/bol-van/zapret/releases/download/v72.9/zapret-v72.9.tar.gz",
+    "sha256": "1e14dc6320dd7b5a1f28ab8145ac76d7a7010ca3cbe71824aa4aa407f7279ddf"
+  }
+}

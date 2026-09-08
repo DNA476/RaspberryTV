@@ -1,0 +1,6 @@
+[Desktop Entry]
+Name=Raspberry TV
+Comment=TV shell session
+Exec=/usr/local/bin/raspberry-tv-session
+Type=Application
+DesktopNames=RaspberryTV

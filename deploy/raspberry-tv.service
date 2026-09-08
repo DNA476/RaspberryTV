@@ -1,0 +1,15 @@
+[Unit]
+Description=Raspberry TV launcher
+StartLimitIntervalSec=60
+StartLimitBurst=5
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/raspberry-tv
+ExecStart=/usr/bin/python3 -m raspberry_tv
+Environment=QT_QPA_PLATFORM=xcb
+Environment=QT_QUICK_CONTROLS_STYLE=Basic
+Restart=always
+RestartSec=2
+TimeoutStopSec=20
+KillMode=mixed

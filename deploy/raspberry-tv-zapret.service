@@ -1,0 +1,35 @@
+[Unit]
+Description=Raspberry TV zapret controller and nfqws
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=simple
+User=root
+Group=raspberry-tv
+WorkingDirectory=/opt/raspberry-tv
+Environment=PYTHONDONTWRITEBYTECODE=1
+ExecStart=/usr/bin/python3 -m raspberry_tv.zapret_service
+ExecStopPost=-/usr/sbin/nft delete table inet raspberry_tv_zapret
+RuntimeDirectory=raspberry-tv-zapret
+RuntimeDirectoryMode=0750
+StateDirectory=raspberry-tv-zapret
+StateDirectoryMode=0755
+Restart=on-failure
+RestartSec=5
+KillMode=control-group
+TimeoutStopSec=12
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+ProtectKernelTunables=true
+ProtectControlGroups=true
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK
+CapabilityBoundingSet=CAP_NET_ADMIN CAP_NET_RAW CAP_SETUID CAP_SETGID CAP_SETPCAP CAP_KILL
+# Preserve the UID transition across systemd's seccomp setup on this Pi image.
+AmbientCapabilities=CAP_SETUID
+UMask=0027
+
+[Install]
+WantedBy=multi-user.target

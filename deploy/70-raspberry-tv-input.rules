@@ -1,0 +1,2 @@
+# Only joystick nodes; don't grant broad access to all input devices.
+SUBSYSTEM=="input", ENV{ID_INPUT_JOYSTICK}=="1", TAG+="uaccess"
