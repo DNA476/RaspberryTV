@@ -97,6 +97,29 @@ class KeyboardStateTests(unittest.TestCase):
             self.bridge.action("editor_save", "private")
             send.assert_not_called()
 
+    def test_face_shortcuts_are_scoped_to_application_and_never_moonlight_or_modals(self):
+        cases = [("browser", "fullscreen", "f"), ("youtube", "fullscreen", "f"),
+                 ("browser", "escape", "Escape"), ("youtube", "escape", "Escape"),
+                 ("kodi", "escape", "Escape"), ("kodi", "fullscreen", None),
+                 ("moonlight", "fullscreen", None), ("moonlight", "escape", None)]
+        with patch('raspberry_tv.bridge.run') as run:
+            for app_id, action, key in cases:
+                for page in ("application", "home", "quick", "power"):
+                    for preview in (False, True):
+                        with self.subTest(app=app_id, action=action, page=page, preview=preview):
+                            run.reset_mock()
+                            self.bridge.apps.active = app_id
+                            self.bridge._update(page=page)
+                            # Keep platform shutdown mocked by changing preview only for dispatch.
+                            self.bridge.preview = preview
+                            self.bridge._controller(action)
+                            self.wait()
+                            self.bridge.preview = True
+                            if key and page == "application" and not preview:
+                                run.assert_called_once_with(["xdotool", "key", "--clearmodifiers", key])
+                            else:
+                                run.assert_not_called()
+
     def test_send_clears_editor_and_releases_controller_without_persisting_text(self):
         for action, enter in (("editor_save", False), ("editor_send_enter", True)):
             with self.subTest(action=action):

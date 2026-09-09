@@ -127,6 +127,12 @@ Pi — 50 тестов прошли**.
 
 ### DualSense — USB и Bluetooth
 
+Следующее обновление (2026-09-09) подготовлено к проверке: обратная прокрутка
+тачпада, физический щелчок слева → ЛКМ, справа → ПКМ, треугольник → F в
+браузере/YouTube и квадрат → Esc в браузере/YouTube/Kodi. До установки этой
+сборки эти изменения не считаются проверенными на реальном интерфейсе.
+Описание и список приёмки — [DUALSENSE.md](DUALSENSE.md).
+
 Пользователь подтвердил работу кнопок, стиков и сенсорной панели по USB и, после исправления сопряжения, по Bluetooth. Проверка по SSH подтверждает `Paired: yes`, `Bonded: yes`, `Trusted: yes`, `Connected: yes`.
 
 До исправления Bluetooth показывал `Trusted: yes`, но `Paired: no`, `Bonded: no`; BlueZ записывал `Authentication attempt without agent` и `Rejected connection from !bonded device`.

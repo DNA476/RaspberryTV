@@ -559,6 +559,12 @@ class Bridge(QObject):
             return
         if action in ("home", "menu", "power"):
             self.action(action)
+        elif action in ("fullscreen", "escape"):
+            if self._state["page"] != "application" or self.preview:
+                return
+            key = "f" if action == "fullscreen" else "Escape"
+            if self.apps.active in ("browser", "youtube") or (self.apps.active == "kodi" and action == "escape"):
+                self._job(lambda: run(["xdotool", "key", "--clearmodifiers", key]), busy=False)
         elif self._state["page"] == "application":
             if self.apps.active in ("youtube", "browser"):
                 key = {"accept": "Return", "back": "Escape", "up": "Up", "down": "Down", "left": "Left", "right": "Right"}.get(action)

@@ -4,3 +4,4 @@
 *.xml text eol=lf
 *.qml text eol=lf
 *.py text eol=lf
+*.rules text eol=lf

@@ -52,6 +52,9 @@ install -m 644 "$project_dir/deploy/99-raspberry-tv-vc4.conf" /etc/X11/xorg.conf
 install -m 644 "$project_dir/deploy/raspberry-tv.service" /etc/systemd/user/raspberry-tv.service
 install -m 644 "$project_dir/deploy/raspberry-tv.desktop" /usr/share/xsessions/raspberry-tv.desktop
 install -m 644 "$project_dir/deploy/70-raspberry-tv-input.rules" /etc/udev/rules.d/70-raspberry-tv-input.rules
+install -d -m 755 /etc/modules-load.d
+printf 'uinput\n' >/etc/modules-load.d/raspberry-tv-uinput.conf
+modprobe uinput
 getent group raspberry-tv >/dev/null || groupadd --system raspberry-tv
 usermod -aG raspberry-tv "$target_user"
 install -m 644 "$project_dir/deploy/50-raspberry-tv.rules" /etc/polkit-1/rules.d/50-raspberry-tv.rules
@@ -60,6 +63,8 @@ install -m 755 "$project_dir/scripts/raspberry-tv-control.sh" /usr/local/bin/ras
 install -m 755 "$project_dir/scripts/recovery.sh" /usr/local/bin/raspberry-tv-recovery
 systemctl enable bluetooth.service NetworkManager.service
 udevadm control --reload-rules
+udevadm trigger --subsystem-match=misc --sysname-match=uinput
+udevadm settle
 if $enable_session; then
     install -d -m 755 /etc/lightdm/lightdm.conf.d
     conf=/etc/lightdm/lightdm.conf.d/80-raspberry-tv.conf

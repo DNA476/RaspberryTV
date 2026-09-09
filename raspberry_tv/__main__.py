@@ -121,10 +121,14 @@ def main():
 
     bridge.surface.connect(surface)
     reader = None
+    touchpad = None
     if not preview:
+        from .touchpad import TouchpadReader
         reader = InputReader(bridge.settings.data["controller"], bridge.controllerEvent.emit, bridge.controllerStatus.emit)
         bridge.input_reader = reader
         reader.start()
+        touchpad = TouchpadReader()
+        touchpad.start()
     surface("home")
     if args.screen not in ("home", "quick", "power"):
         bridge.action("section", args.screen)
@@ -153,6 +157,9 @@ def main():
         return app.exec()
     finally:
         server.close()
+        if touchpad:
+            touchpad.stop()
+            touchpad.join(timeout=4)
         if reader:
             reader.stop()
             reader.join(timeout=3)

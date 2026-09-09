@@ -165,6 +165,20 @@ class ControllerTests(unittest.TestCase):
         self.reader.button(316, 0, 1.2)
         self.assertEqual(self.events, ["home"])
 
+    def test_face_shortcuts_trigger_once_on_press(self):
+        for code in (307, 308):
+            for value in (1, 2, 0):
+                self.reader.button(code, value, 1.0)
+        self.assertEqual(self.events, ["fullscreen", "escape"])
+
+    def test_older_controller_settings_gain_shortcuts(self):
+        from raspberry_tv.config import validate
+        old = {"home": 316, "menu": 315, "accept": 304, "back": 305}
+        settings = validate({"controller": old})
+        self.assertEqual(settings["controller"], DEFAULTS["controller"])
+        with self.assertRaises(ValueError):
+            validate({"controller": {**old, "escape": 304}})
+
     def test_long_home_press_does_not_also_trigger_home_on_release(self):
         self.reader.button(316, 1, 1.0)
         self.reader.tick(2.3)
