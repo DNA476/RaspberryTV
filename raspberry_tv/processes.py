@@ -41,7 +41,7 @@ def app_command(app_id: str, state_dir: Path, start_url: str | None = None) -> l
         return [chromium, "--kiosk" if app_id == "youtube" else "--start-fullscreen", "--no-first-run", "--no-default-browser-check",
                 "--disable-session-crashed-bubble", "--ozone-platform=x11",
                 f"--class=raspberrytv-{app_id}", f"--user-data-dir={state_dir / 'browsers' / app_id}", url]
-    executable = {"kodi": "kodi", "moonlight": "moonlight"}.get(app_id)
+    executable = {"kodi": "kodi", "moonlight": "moonlight-qt"}.get(app_id)
     if not executable or not shutil.which(executable):
         raise Unavailable("Приложение ещё не установлено")
     return [executable, "--standalone"] if app_id == "kodi" else [executable]
@@ -160,11 +160,17 @@ class Applications:
         if app_id == "kodi":
             from .kodi import prepare_cec
             prepare_cec(Path.home() / ".kodi" / "userdata" / "peripheral_data")
+        environment = os.environ.copy()
+        if app_id == "moonlight":
+            from .moonlight import prepare_settings
+            prepare_settings()
+            # evdev respects the launcher's modal gamepad grab; HIDAPI bypasses it.
+            environment.update(QT_QPA_PLATFORM="xcb", SDL_VIDEODRIVER="x11", SDL_JOYSTICK_HIDAPI="0")
         self.state_dir.mkdir(parents=True, exist_ok=True)
         log = open(self.state_dir / f"{app_id}.log", "ab", buffering=0)
         try:
             process = subprocess.Popen(command, stdin=subprocess.DEVNULL, stdout=log, stderr=log,
-                                       start_new_session=True)
+                                       start_new_session=True, env=environment)
         except OSError:
             log.close()
             raise Unavailable("Не удалось запустить приложение")
@@ -189,19 +195,27 @@ class Applications:
                 parents[int(entry.parent.name)] = int(tail[1])
             except (OSError, ValueError, IndexError):
                 continue
-        for app in self.running.values():
+        for app_id, app in self.running.items():
             descendants = {app.process.pid}
             for _ in range(12):
                 more = {pid for pid, parent in parents.items() if parent in descendants}
                 if more.issubset(descendants):
                     break
                 descendants |= more
-            for window, pid in windows.items():
-                if pid in descendants:
-                    if app.window != window:
-                        app.window = window
-                        run(["wmctrl", "-ir", app.window, "-b", "add,fullscreen"], check=False)
-                    break
+            owned = [window for window, pid in windows.items() if pid in descendants]
+            if not owned:
+                app.window = ""
+                continue
+            window = owned[0]
+            if app_id == "moonlight" and len(owned) > 1:
+                # The Qt app picker and SDL stream may coexist. Remember the
+                # focused owned window while the launcher overlay takes focus.
+                focused = run(["xdotool", "getactivewindow"], check=False)
+                active = next((item for item in owned if focused.isdigit() and int(item, 16) == int(focused)), "")
+                window = active or (app.window if app.window in owned else owned[-1])
+            if app.window != window:
+                app.window = window
+                run(["wmctrl", "-ir", app.window, "-b", "add,fullscreen"], check=False)
 
     def resume(self) -> None:
         app = self.running.get(self.active)
