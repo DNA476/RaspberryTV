@@ -1,2 +1,4 @@
 # Only joystick nodes; don't grant broad access to all input devices.
 SUBSYSTEM=="input", ENV{ID_INPUT_JOYSTICK}=="1", TAG+="uaccess"
+# The logged-in TV user creates a virtual touchpad to remap its physical click.
+SUBSYSTEM=="misc", KERNEL=="uinput", TAG+="uaccess", OPTIONS+="static_node=uinput"

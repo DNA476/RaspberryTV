@@ -15,7 +15,8 @@ DEFAULTS = {
     "scale": "normal",
     "cec": True,
     "browser": {"start_url": "https://www.google.com/"},
-    "controller": {"home": 316, "menu": 315, "accept": 304, "back": 305},
+    "controller": {"home": 316, "menu": 315, "accept": 304, "back": 305,
+                   "fullscreen": 307, "escape": 308},
     "zapret": {"profile": "YouTube", "domains": ["youtube.com", "googlevideo.com", "ytimg.com"],
                "strategy": "general.bat", "interface": "", "tcp": False, "udp": False, "backend": "nftables"},
 }
@@ -103,7 +104,7 @@ def validate(data: dict) -> dict:
         raise ValueError("Некорректная настройка HDMI-CEC")
     merged["browser"]["start_url"] = normalize_url(merged["browser"]["start_url"])
     mappings = merged["controller"]
-    if any(type(v) is not int or not 0 <= v <= 767 for v in mappings.values()) or len(set(mappings.values())) != 4:
+    if any(type(v) is not int or not 0 <= v <= 767 for v in mappings.values()) or len(set(mappings.values())) != len(mappings):
         raise ValueError("Кнопки контроллера должны быть разными")
     zapret = merged["zapret"]
     if not isinstance(zapret["domains"], list) or not all(isinstance(x, str) for x in zapret["domains"]):

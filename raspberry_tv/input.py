@@ -126,7 +126,7 @@ class InputReader(threading.Thread):
                     self.emit("home")
                 self.home_down = None
         elif value == 1:
-            for action in ("menu", "accept", "back"):
+            for action in ("menu", "accept", "back", "fullscreen", "escape"):
                 if code == self.mappings[action]:
                     self.emit(action)
                     break
