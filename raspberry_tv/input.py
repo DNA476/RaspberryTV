@@ -1,4 +1,4 @@
-"""Global controller hotkeys via evdev; the game retains its own controller events."""
+"""Global hotkeys via evdev; modal overlays temporarily capture controller input."""
 
 import select
 import threading
@@ -13,6 +13,9 @@ class InputReader(threading.Thread):
         self.report = report
         self.stop_event = threading.Event()
         self.devices = {}
+        self.devices_lock = threading.RLock()
+        self.captured = False
+        self.grabbed = set()
         self.home_down = None
         self.long_sent = False
         self.directions = {}
@@ -39,8 +42,8 @@ class InputReader(threading.Thread):
                             if evdev.ecodes.BTN_GAMEPAD not in keys:
                                 device.close()
                                 continue
-                            self.devices[device.fd] = device
-                            self.report(device.name)
+                            if self.add_device(device):
+                                self.report(device.name)
                         except OSError:
                             continue
                 ready, _, _ = select.select(list(self.devices), [], [], 0.02) if self.devices else ([], [], [])
@@ -64,15 +67,55 @@ class InputReader(threading.Thread):
                                     self.direction((fd, code), (1 if value > 0 else -1) if abs(value) > 0.55 else 0,
                                                    code == evdev.ecodes.ABS_X, now)
                     except OSError:
-                        device = self.devices.pop(fd)
-                        device.close()
+                        with self.devices_lock:
+                            device = self.devices.pop(fd)
+                            self.grabbed.discard(fd)
+                            device.close()
                         self.directions = {k: v for k, v in self.directions.items() if k[0] != fd}
                         self.home_down = None
                         self.report("Контроллер отключён")
                 self.tick(now)
         finally:
-            for device in self.devices.values():
-                device.close()
+            self.set_capture(False)
+            with self.devices_lock:
+                for device in self.devices.values():
+                    device.close()
+
+    def add_device(self, device):
+        with self.devices_lock:
+            if self.captured:
+                try:
+                    device.grab()
+                except OSError:
+                    device.close()
+                    self.report("Перехват геймпада недоступен")
+                    return False
+                self.grabbed.add(device.fd)
+            self.devices[device.fd] = device
+            return True
+
+    def set_capture(self, enabled):
+        """Temporarily keep modal navigation away from native application input."""
+        with self.devices_lock:
+            try:
+                if enabled:
+                    for fd, device in self.devices.items():
+                        if fd not in self.grabbed:
+                            device.grab()
+                            self.grabbed.add(fd)
+                    self.captured = True
+                    return True
+            except OSError:
+                pass
+            for fd in self.grabbed:
+                try:
+                    self.devices[fd].ungrab()
+                except OSError:
+                    pass
+            self.grabbed.clear()
+            self.captured = False
+            self.directions.clear()
+            return not enabled
 
     def button(self, code: int, value: int, now: float):
         if code == self.mappings["home"]:

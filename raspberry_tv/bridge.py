@@ -45,6 +45,9 @@ class Bridge(QObject):
         self.apps = Applications(config_dir / "state")
         self.pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix="system")
         self.pending = False
+        self.input_reader = None
+        self._text_target = None
+        self._typing = False
         self.display_change = None
         self._return_page = "home"
         self._state = {"page": "home", "section": "devices", "rows": [], "busy": False,
@@ -52,7 +55,8 @@ class Bridge(QObject):
                        "controller": "Контроллер не подключён", "network": "Предпросмотр" if preview else "Проверка сети…",
                        "wifi": False, "bluetooth": False, "ip": "—", "devices": [], "outputs": [],
                        "zapret_status": "Нужна Raspberry Pi" if preview else "Проверка…", "zapret": {},
-                       "editor": {}, "confirm": {}, "countdown": 0, "settings": deepcopy(self.settings.data)}
+                       "editor": {}, "confirm": {}, "countdown": 0, "keyboardAvailable": False,
+                       "settings": deepcopy(self.settings.data)}
         self.completed.connect(self._complete)
         self.controllerEvent.connect(self._controller)
         self.controllerStatus.connect(self._controller_status)
@@ -80,6 +84,11 @@ class Bridge(QObject):
             self.rowsChanged.emit()
 
     def _page(self, page):
+        if self.input_reader:
+            if not self.input_reader.set_capture(page in ("quick", "power") or self._typing):
+                self._text_target = None
+                self._update(keyboardAvailable=False)
+                self.notice.emit("Контроллер", "Не удалось перехватить кнопки геймпада")
         self.surfaceChanging.emit()
         self._update(page=page)
         self.surface.emit(page)
@@ -138,8 +147,14 @@ class Bridge(QObject):
         def result(data):
             exited, status = data
             self._update(running=list(self.apps.running), activeApp=self.apps.active)
+            if not self.apps.active and self._return_page == "application":
+                self._return_page = "home"
             if status:
                 self._status(status)
+            if self._text_target and any(app_id == self._text_target.app_id for app_id, _ in exited):
+                self._text_target = None
+                self._update(editor={}, keyboardAvailable=False)
+                self._page("home")
             if exited and self._state["page"] == "application" and not self.apps.active:
                 self._page("home")
             for app_id, failed in exited:
@@ -165,7 +180,18 @@ class Bridge(QObject):
             self.notice.emit("Не получилось", str(exc))
 
     def _action(self, action, value):
+        if self._typing:
+            if action not in ("home", "back", "menu", "power"):
+                return
+            self.apps.text_cancelled.set()
+            self._typing = False
+            self._text_target = None
+            self._update(editor={}, keyboardAvailable=False)
+            self._page("home")
+            return
         if action == "home":
+            self._text_target = None
+            self._update(keyboardAvailable=False)
             self._update(editor={}, confirm={})
             self._page("home")
         elif action == "section":
@@ -183,7 +209,28 @@ class Bridge(QObject):
             else:
                 self._page("home")
         elif action in ("menu", "power"):
+            if self._state["editor"].get("external"):
+                self._update(editor={})
+                self._page("quick")
+                return
             if self._state["editor"] or self._state["confirm"] or self._state["countdown"]:
+                return
+            if action == "menu" and self._state["page"] == "application":
+                self._text_target = None
+                self._update(keyboardAvailable=False)
+                def prepare():
+                    try:
+                        return self.apps.text_target()
+                    except Unavailable:
+                        return None
+                def show_menu(target):
+                    if self._state["page"] != "application":
+                        return
+                    self._text_target = target
+                    self._return_page = "application"
+                    self._update(keyboardAvailable=target is not None)
+                    self._page("quick")
+                self._job(prepare, show_menu)
                 return
             if self._state["page"] == ("quick" if action == "menu" else "power"):
                 self._page(self._return_page)
@@ -210,6 +257,16 @@ class Bridge(QObject):
             if self._state["activeApp"] != "browser":
                 raise Unavailable("Сначала открой браузер")
             self._edit("Открыть сайт", "Адрес сайта · откроется в новой вкладке", action, "", submit="Открыть")
+        elif action == "keyboard":
+            self._need_pi()
+            if not self._text_target or not self._state["keyboardAvailable"]:
+                raise Unavailable("Выбери поле в приложении и открой Options заново")
+            self._edit("Клавиатура · " + TITLES[self._text_target.app_id],
+                       "Текст появится в выбранном поле приложения", "external_text", "",
+                       external=True, submit="Вставить")
+        elif action == "editor_send_enter":
+            if self._state["editor"].get("external"):
+                self._send_text(value, enter=True)
         elif action == "browser_home":
             self._edit("Стартовая страница браузера", "Открывается при новом запуске браузера", action,
                        self.settings.data["browser"]["start_url"])
@@ -368,7 +425,10 @@ class Bridge(QObject):
     def _save_editor(self, value):
         editor = self._state["editor"]
         target = editor.get("action")
-        if target == "browser_address":
+        if target == "external_text":
+            self._send_text(value)
+            return
+        elif target == "browser_address":
             url = normalize_url(value)
             self._browser_action("address", url)
             return
@@ -387,6 +447,36 @@ class Bridge(QObject):
                              lambda _: self.notice.emit("Сеть", "Подключение установлено")):
                 return
         self._update(editor={})
+
+    def _send_text(self, text, enter=False):
+        self._need_pi()
+        from .text_input import validate_text, InputFailure
+        try:
+            validate_text(text)
+        except InputFailure as exc:
+            raise Unavailable(str(exc)) from None
+        if self.pending or not self._text_target:
+            raise Unavailable("Дождись завершения действия или открой клавиатуру заново")
+        if self.input_reader and not self.input_reader.set_capture(True):
+            raise Unavailable("Не удалось перехватить кнопки геймпада. Открой клавиатуру заново")
+        target = self._text_target
+        self.apps.text_cancelled.clear()
+        self._typing = True
+        self._update(editor={}, keyboardAvailable=False)
+        self._page("application")
+        def finished(_=None):
+            if not self._typing:
+                return
+            self._typing = False
+            self._text_target = None
+            if self.input_reader:
+                self.input_reader.set_capture(False)
+        def failed():
+            was_typing = self._typing
+            finished()
+            if was_typing:
+                self._page("home" if target.app.process.poll() is not None else "quick")
+        self._job(lambda: self.apps.insert_text(target, text, enter), finished, on_error=failed)
 
     def _list(self, section, rows):
         self._update(section=section, rows=rows or [row("Пока ничего не найдено", "Проверь подключение и повтори поиск", enabled=False)])
@@ -465,6 +555,8 @@ class Bridge(QObject):
 
     @Slot(str)
     def _controller(self, action):
+        if self._typing and action not in ("home", "menu", "power", "back"):
+            return
         if action in ("home", "menu", "power"):
             self.action(action)
         elif self._state["page"] == "application":
@@ -479,10 +571,20 @@ class Bridge(QObject):
 
     @Slot(str)
     def _controller_status(self, name):
+        if name in ("Контроллер отключён", "Перехват геймпада недоступен"):
+            self.apps.text_cancelled.set()
+            self._typing = False
+            self._text_target = None
+            self._update(editor={}, keyboardAvailable=False)
+            if self.input_reader:
+                self.input_reader.set_capture(False)
         self._update(controller=name)
         self.notice.emit("Контроллер", name)
 
     def shutdown(self):
+        self.apps.text_cancelled.set()
+        if self.input_reader:
+            self.input_reader.set_capture(False)
         self.poll_timer.stop()
         self.countdown_timer.stop()
         self.pool.shutdown(wait=True, cancel_futures=True)

@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="ru">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Проверка клавиатуры Raspberry TV</title>
+<style>
+  body { margin: 0; background: #111; color: #eee; font: 24px/1.4 sans-serif; }
+  main { max-width: 980px; padding: 28px; margin: auto; }
+  h1 { font-size: 32px; margin: 0 0 8px; }
+  p { color: #bbb; margin: 6px 0 20px; }
+  label { display: block; margin-top: 14px; }
+  input, button { box-sizing: border-box; font: inherit; border: 2px solid #666;
+    border-radius: 10px; background: #222; color: white; padding: 10px 16px; }
+  input { width: 100%; }
+  :focus { outline: 3px solid #ff1841; outline-offset: 2px; }
+  button { margin: 16px 12px 0 0; }
+  output { display: block; margin-top: 12px; }
+</style>
+<main>
+  <h1>Проверка экранной клавиатуры</h1>
+  <p>Выбери поле → Options → Клавиатура. Страница работает локально,
+    ничего не отправляет и не сохраняет. Для пароля используй выдуманный текст.</p>
+  <form autocomplete="off">
+    <label>Первое поле<input id="first" autocomplete="off" autofocus></label>
+    <label>Второе поле<input id="second" autocomplete="off"></label>
+    <label>Тестовый пароль<input id="secret" type="password" autocomplete="new-password"></label>
+    <button type="submit">Подтвердить / Enter</button>
+    <button type="reset">Очистить поля</button>
+  </form>
+  <output id="result" aria-live="polite">Подтверждений: 0</output>
+</main>
+<script>
+  let count = 0;
+  const form = document.querySelector('form');
+  form.addEventListener('submit', event => {
+    event.preventDefault();
+    document.querySelector('#result').textContent = `Подтверждений: ${++count}`;
+  });
+  form.addEventListener('reset', () => {
+    count = 0;
+    document.querySelector('#result').textContent = 'Подтверждений: 0';
+  });
+</script>
+</html>

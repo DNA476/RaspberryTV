@@ -351,16 +351,18 @@ FocusScope {
             Repeater {
                 model: root.s.page === "power" ? [{title: "Выключить", action: "poweroff"}, {title: "Перезагрузить", action: "reboot"},
                     {title: "Спящий режим · недоступен", action: "suspend"}, {title: "Отмена", action: "back"}] :
-                    [{title: "На главный экран", action: "home"}].concat(root.s.activeApp === "browser" ?
+                    [{title: "На главный экран", action: "home"}].concat(["browser", "youtube", "kodi"].indexOf(root.s.activeApp) >= 0 ?
+                    [{title: "Клавиатура", action: "keyboard"}] : []).concat(root.s.activeApp === "browser" ?
                     [{title: "Открыть адрес", action: "browser_address"}, {title: "Назад по истории", action: "browser_back"},
                      {title: "Вперёд по истории", action: "browser_forward"}, {title: "Обновить страницу", action: "browser_reload"}] : []).concat(
                     [{title: "Свернуть", action: "minimize"}, {title: "Закрыть", action: "close"}, {title: "Настройки", action: "section"}, {title: "Отмена", action: "back"}])
                 TvButton {
                     required property var modelData
                     objectName: "quick_" + modelData.action
-                    unit: root.u; width: quickColumn.width
+                    unit: root.u; width: quickColumn.width; height: 54 * root.u
                     text: modelData.title
-                    enabled: modelData.action !== "suspend" && (["close", "minimize"].indexOf(modelData.action) < 0 || !!root.s.activeApp)
+                    enabled: modelData.action !== "suspend" && (modelData.action !== "keyboard" || root.s.keyboardAvailable) &&
+                             (["close", "minimize"].indexOf(modelData.action) < 0 || !!root.s.activeApp)
                     onClicked: backend.action(modelData.action, modelData.action === "section" ? "devices" : "")
                 }
             }
@@ -380,7 +382,8 @@ FocusScope {
             if (visible) {
                 root.editorReturnFocus = root.Window.window.activeFocusItem
                 editorText.text = root.s.editor.text || ""
-                Qt.callLater(function() { if (root.s.editor.secret) passwordText.forceActiveFocus(); else editorText.forceActiveFocus() })
+                keyboard.reveal = true; keyboard.shifted = false; keyboard.symbols = false
+                Qt.callLater(function() { if (root.s.editor.secret || root.s.editor.external) passwordText.forceActiveFocus(); else editorText.forceActiveFocus() })
             } else {
                 editorText.text = ""; passwordText.text = ""
                 Qt.callLater(function() { root.restoreFocus(root.editorReturnFocus) })
@@ -388,7 +391,7 @@ FocusScope {
         }
         Rectangle {
             id: editorPanel
-            width: 1170 * root.u; height: 690 * root.u
+            width: 1170 * root.u; height: 830 * root.u
             anchors.centerIn: parent; radius: 26 * root.u; color: "#101010"; border.color: "#494949"
             Column {
                 x: 38 * root.u; y: 28 * root.u; width: parent.width - 76 * root.u
@@ -396,7 +399,7 @@ FocusScope {
                 Text { text: root.s.editor.title || ""; color: "white"; font.pixelSize: 34 * root.u }
                 Text { text: root.s.editor.subtitle || ""; color: "#949494"; font.pixelSize: 22 * root.u }
                 ScrollView {
-                    visible: !root.s.editor.secret
+                    visible: !root.s.editor.secret && !root.s.editor.external
                     width: parent.width; height: 112 * root.u
                     TextArea {
                         id: editorText
@@ -410,16 +413,20 @@ FocusScope {
                             else backend.action("editor_save", text)
                         }
                         // Passwords are entered in the dedicated single-line field below.
-                        visible: !root.s.editor.secret
+                        visible: !root.s.editor.secret && !root.s.editor.external
                         background: Rectangle { color: "#181818"; border.color: editorText.activeFocus ? "#ff1841" : "#494949"; radius: 12 * root.u }
                     }
                 }
                 TextField {
                     id: passwordText
                     objectName: "passwordText"
-                    visible: !!root.s.editor.secret
+                    visible: !!root.s.editor.secret || !!root.s.editor.external
+                    activeFocusOnTab: true
                     width: parent.width; height: 112 * root.u
-                    echoMode: TextInput.Password
+                    maximumLength: root.s.editor.external ? 512 : 32767
+                    echoMode: root.s.editor.external && keyboard.reveal ? TextInput.Normal : TextInput.Password
+                    inputMethodHints: Qt.ImhNoPredictiveText | Qt.ImhSensitiveData
+                    Keys.onReturnPressed: backend.action("editor_save", text)
                     color: "white"; font.pixelSize: 26 * root.u
                     background: Rectangle { color: "#181818"; border.color: passwordText.activeFocus ? "#ff1841" : "#494949" }
                     onVisibleChanged: if (visible) { text = ""; forceActiveFocus() }
@@ -429,7 +436,11 @@ FocusScope {
                     width: parent.width; height: 295 * root.u
                     property bool russian: false
                     property bool shifted: false
-                    property string letters: russian ? "йцукенгшщзхъфывапролджэячсмитьбюё.,-/@:_0123456789" : "qwertyuiopasdfghjklzxcvbnm0123456789.,-/@:_?=&%+#!"
+                    property bool reveal: true
+                    property bool symbols: false
+                    function field() { return root.s.editor.secret || root.s.editor.external ? passwordText : editorText }
+                    property string letters: symbols ? "0123456789.,:;!?@#$%&*+-_=()[]{}<>/\\|\"'`~" :
+                        russian ? "йцукенгшщзхъфывапролджэячсмитьбюё.,-/@:_0123456789" : "qwertyuiopasdfghjklzxcvbnm0123456789.,-/@:_?=&%+#!"
                     Grid {
                         columns: 12; spacing: 7 * root.u
                         Repeater {
@@ -439,7 +450,8 @@ FocusScope {
                                 unit: root.u; width: 83 * root.u; height: 51 * root.u; padding: 0
                                 text: keyboard.shifted ? modelData.toUpperCase() : modelData
                                 onClicked: {
-                                    let field = root.s.editor.secret ? passwordText : editorText
+                                    let field = keyboard.field()
+                                    if (field.selectionStart !== field.selectionEnd) field.remove(field.selectionStart, field.selectionEnd)
                                     field.insert(field.cursorPosition, text)
                                 }
                             }
@@ -448,11 +460,20 @@ FocusScope {
                 }
                 Row {
                     spacing: 12 * root.u
-                    TvButton { unit: root.u; text: keyboard.russian ? "ABC" : "АБВ"; onClicked: keyboard.russian = !keyboard.russian }
-                    TvButton { unit: root.u; text: "Aa"; onClicked: keyboard.shifted = !keyboard.shifted }
-                    TvButton { unit: root.u; text: "Пробел"; onClicked: { let f = root.s.editor.secret ? passwordText : editorText; f.insert(f.cursorPosition, " ") } }
-                    TvButton { unit: root.u; text: "Стереть"; onClicked: { let f = root.s.editor.secret ? passwordText : editorText; if (f.cursorPosition) f.remove(f.cursorPosition - 1, f.cursorPosition) } }
-                    TvButton { objectName: "editorSubmit"; unit: root.u; text: root.s.editor.submit || "Сохранить"; accent: true; onClicked: backend.action("editor_save", root.s.editor.secret ? passwordText.text : editorText.text) }
+                    TvButton { unit: root.u; width: 136 * root.u; text: keyboard.russian ? "ABC" : "АБВ"; onClicked: keyboard.russian = !keyboard.russian }
+                    TvButton { unit: root.u; width: 90 * root.u; text: "Aa"; onClicked: keyboard.shifted = !keyboard.shifted }
+                    TvButton { unit: root.u; width: 110 * root.u; text: keyboard.symbols ? "Буквы" : "123 #"; onClicked: keyboard.symbols = !keyboard.symbols }
+                    TvButton { unit: root.u; width: 158 * root.u; text: "Пробел"; onClicked: { let f = keyboard.field(); f.insert(f.cursorPosition, " ") } }
+                    TvButton { unit: root.u; width: 158 * root.u; text: "Стереть"; onClicked: { let f = keyboard.field(); if (f.selectionStart !== f.selectionEnd) f.remove(f.selectionStart, f.selectionEnd); else if (f.cursorPosition) f.remove(f.cursorPosition - 1, f.cursorPosition) } }
+                    TvButton { unit: root.u; width: 85 * root.u; text: "←"; onClicked: { let f = keyboard.field(); f.cursorPosition = Math.max(0, f.cursorPosition - 1) } }
+                    TvButton { unit: root.u; width: 85 * root.u; text: "→"; onClicked: { let f = keyboard.field(); f.cursorPosition = Math.min(f.length, f.cursorPosition + 1) } }
+                    TvButton { unit: root.u; width: 186 * root.u; visible: !!root.s.editor.external; text: keyboard.reveal ? "Скрыть текст" : "Показать"; onClicked: keyboard.reveal = !keyboard.reveal }
+                }
+                Row {
+                    spacing: 12 * root.u
+                    TvButton { objectName: "editorSubmit"; unit: root.u; text: root.s.editor.submit || "Сохранить"; accent: true; onClicked: backend.action("editor_save", keyboard.field().text) }
+                    TvButton { objectName: "editorSendEnter"; unit: root.u; visible: !!root.s.editor.external; text: "Вставить и Enter"; onClicked: backend.action("editor_send_enter", keyboard.field().text) }
+                    TvButton { unit: root.u; text: "Очистить"; onClicked: keyboard.field().text = "" }
                     TvButton { unit: root.u; text: "Отмена"; onClicked: backend.action("back", "") }
                 }
             }

@@ -3,10 +3,13 @@
 from dataclasses import dataclass
 from contextlib import closing
 import os
+import json
 from pathlib import Path
 import shutil
 import signal
 import subprocess
+import sys
+import threading
 import time
 
 from .config import DEFAULTS, normalize_url
@@ -81,11 +84,71 @@ class RunningApp:
     closing: bool = False
 
 
+@dataclass(frozen=True)
+class TextTarget:
+    app_id: str
+    app: RunningApp
+    window: str
+    focus: int
+
+
 class Applications:
     def __init__(self, state_dir: Path):
         self.state_dir = state_dir
         self.running: dict[str, RunningApp] = {}
         self.active = ""
+        self.text_cancelled = threading.Event()
+
+    def text_target(self) -> TextTarget:
+        from .text_input import capture_focus
+        app = self.running.get(self.active)
+        if self.active not in ("browser", "youtube", "kodi") or not app or app.process.poll() is not None or not app.window:
+            raise Unavailable("Клавиатура доступна в браузере, YouTube и Kodi")
+        try:
+            focus = capture_focus(int(app.window, 16))
+        except Exception:
+            raise Unavailable("Сначала выбери поле в приложении, затем открой Options") from None
+        return TextTarget(self.active, app, app.window, focus)
+
+    def insert_text(self, target: TextTarget, text: str, enter=False) -> None:
+        from .text_input import validate_text, InputFailure
+        try:
+            validate_text(text)
+        except InputFailure as exc:
+            raise Unavailable(str(exc)) from None
+        app = self.running.get(target.app_id)
+        if (app is not target.app or self.active != target.app_id or app.process.poll() is not None
+                or app.window != target.window or self.text_cancelled.is_set()):
+            raise Unavailable("Приложение изменилось. Открой клавиатуру заново")
+        run(["wmctrl", "-ia", target.window])
+        request = None
+        try:
+            request = subprocess.Popen([sys.executable, "-m", "raspberry_tv.text_input",
+                                        str(int(target.window, 16)), str(target.focus)],
+                                       stdin=subprocess.PIPE, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                                       start_new_session=True)
+            data = json.dumps({"text": text, "enter": enter}, ensure_ascii=False).encode("utf-8")
+            deadline = time.monotonic() + 30
+            while True:
+                if self.text_cancelled.is_set() or app.process.poll() is not None or time.monotonic() >= deadline:
+                    raise Unavailable("Ввод прерван. Проверь поле перед повторной отправкой")
+                try:
+                    request.communicate(data, timeout=.1)
+                    break
+                except subprocess.TimeoutExpired:
+                    data = None
+            if request.returncode:
+                raise Unavailable("Ввод остановлен. Проверь поле и открой клавиатуру заново")
+        except Exception:
+            raise Unavailable("Ввод остановлен. Часть текста могла попасть в поле — проверь его") from None
+        finally:
+            if request is not None and request.poll() is None:
+                request.terminate()
+                try:
+                    request.wait(timeout=1)
+                except subprocess.TimeoutExpired:
+                    request.kill()
+                    request.wait(timeout=1)
 
     def launch(self, app_id: str, start_url: str | None = None) -> None:
         existing = self.running.get(app_id)
