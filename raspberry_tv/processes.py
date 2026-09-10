@@ -9,6 +9,8 @@ import signal
 import subprocess
 import time
 
+from .config import DEFAULTS, normalize_url
+
 class Unavailable(RuntimeError):
     pass
 
@@ -27,13 +29,13 @@ def run(argv: list[str], timeout: float = 12, check: bool = True) -> str:
     return result.stdout.strip()
 
 
-def app_command(app_id: str, state_dir: Path) -> list[str]:
-    if app_id == "youtube":
-        url = "https://www.youtube.com/"
+def app_command(app_id: str, state_dir: Path, start_url: str | None = None) -> list[str]:
+    if app_id in ("youtube", "browser"):
+        url = "https://www.youtube.com/" if app_id == "youtube" else normalize_url(start_url or DEFAULTS["browser"]["start_url"])
         chromium = shutil.which("chromium") or shutil.which("chromium-browser")
         if not chromium:
             raise Unavailable("Chromium ещё не установлен")
-        return [chromium, "--kiosk", "--no-first-run", "--no-default-browser-check",
+        return [chromium, "--kiosk" if app_id == "youtube" else "--start-fullscreen", "--no-first-run", "--no-default-browser-check",
                 "--disable-session-crashed-bubble", "--ozone-platform=x11",
                 f"--class=raspberrytv-{app_id}", f"--user-data-dir={state_dir / 'browsers' / app_id}", url]
     executable = {"kodi": "kodi", "moonlight": "moonlight"}.get(app_id)
@@ -85,13 +87,13 @@ class Applications:
         self.running: dict[str, RunningApp] = {}
         self.active = ""
 
-    def launch(self, app_id: str) -> None:
+    def launch(self, app_id: str, start_url: str | None = None) -> None:
         existing = self.running.get(app_id)
         if existing and existing.process.poll() is None:
             self.active = app_id
             self.resume()
             return
-        command = app_command(app_id, self.state_dir)
+        command = app_command(app_id, self.state_dir, start_url)
         if app_id == "kodi":
             from .kodi import prepare_cec
             prepare_cec(Path.home() / ".kodi" / "userdata" / "peripheral_data")
@@ -142,6 +144,50 @@ class Applications:
         app = self.running.get(self.active)
         if app and app.window:
             run(["wmctrl", "-ia", app.window])
+
+    def browser_action(self, action: str, value: str = "") -> None:
+        """Open URLs through Chromium's existing profile; use fixed keys for history."""
+        keys = {"back": "alt+Left", "forward": "alt+Right", "reload": "F5"}
+        if action not in (*keys, "address"):
+            raise ValueError("Неизвестное действие браузера")
+        url = normalize_url(value) if action == "address" else ""
+        app = self.running.get("browser")
+        if self.active != "browser" or not app or app.process.poll() is not None or not app.window:
+            raise Unavailable("Сначала открой браузер")
+        window = app.window
+        run(["xdotool", "windowactivate", "--sync", window], timeout=3)
+
+        def check_focus():
+            try:
+                focused = int(run(["xdotool", "getactivewindow"])) == int(window, 16)
+            except ValueError:
+                focused = False
+            if not focused or app.process.poll() is not None:
+                raise Unavailable("Браузер потерял фокус. Повтори действие")
+
+        check_focus()
+        if action == "address":
+            # Ctrl+L is not reliable in the Pi's fullscreen Chromium. Its process
+            # singleton opens the URL in a new tab of our existing profile instead.
+            try:
+                argv = [arg for arg in app_command("browser", self.state_dir, url) if arg != "--start-fullscreen"]
+                request = subprocess.Popen(argv,
+                    stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                    start_new_session=True)
+            except OSError:
+                raise Unavailable("Не удалось передать адрес браузеру") from None
+            try:
+                code = request.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                # If the old browser exits in this interval, do not leave a new,
+                # untracked browser process behind when the request times out.
+                self._terminate(RunningApp(request, None, time.monotonic()))
+                raise Unavailable("Браузер не принял адрес вовремя. Открой его заново") from None
+            if code or app.process.poll() is not None:
+                raise Unavailable("Браузер закрылся или не принял адрес")
+            run(["wmctrl", "-ir", window, "-b", "add,fullscreen"])
+        else:
+            run(["xdotool", "key", "--clearmodifiers", keys[action]])
 
     def wait_ready(self, app_id: str, timeout: float = 20) -> None:
         deadline = time.monotonic() + timeout

@@ -7,6 +7,7 @@ os.environ["QT_QUICK_CONTROLS_STYLE"] = "Basic"
 from pathlib import Path
 import tempfile
 import unittest
+from unittest.mock import patch
 
 from PySide6.QtCore import QObject, QUrl, Qt
 from PySide6.QtGui import QFont, QFontDatabase, QGuiApplication
@@ -46,9 +47,19 @@ class InterfaceTests(unittest.TestCase):
         self.bridge.shutdown()
         self.directory.cleanup()
 
+    def visual_item(self, name, parent=None):
+        parent = parent or self.root
+        if parent.objectName() == name:
+            return parent
+        for child in parent.childItems():
+            found = self.visual_item(name, child)
+            if found is not None:
+                return found
+        return None
+
     def test_keyboard_visits_all_tiles_and_enters_settings(self):
         self.assertEqual(self.view.activeFocusItem().objectName(), "tileKodi")
-        for expected in ("tileYoutube", "tileMoonlight", "tileSettings"):
+        for expected in ("tileYoutube", "tileMoonlight", "tileBrowser", "tileSettings"):
             QTest.keyClick(self.view, Qt.Key_Right)
             QTest.qWait(170)
             self.assertEqual(self.view.activeFocusItem().objectName(), expected)
@@ -88,7 +99,7 @@ class InterfaceTests(unittest.TestCase):
             QTest.qWait(5)
             item = self.view.activeFocusItem()
             self.assertNotEqual(item.objectName(), "tileYoutube")
-            self.assertNotEqual(item.objectName(), "headerSettings")
+            self.assertNotEqual(item.objectName(), "headerPower")
         self.bridge.controllerEvent.emit("back")
         self.assertFalse(self.bridge.state["editor"])
 
@@ -121,6 +132,134 @@ class InterfaceTests(unittest.TestCase):
             self.bridge.action(action)
             self.assertFalse(self.bridge.state["confirm"])
             self.assertIn("Raspberry Pi", self.messages[-1][1])
+
+    def test_power_button_opens_menu_and_cancel_restores_header_focus(self):
+        header = self.root.findChild(QObject, "headerPower")
+        header.forceActiveFocus()
+        self.bridge.controllerEvent.emit("accept")
+        QTest.qWait(30)
+        self.assertEqual(self.bridge.state["page"], "power")
+        sleep = self.visual_item("quick_suspend")
+        self.assertFalse(sleep.property("enabled"))
+        for _ in range(2):
+            self.bridge.controllerEvent.emit("down")
+            QTest.qWait(10)
+        self.assertEqual(self.view.activeFocusItem().objectName(), "quick_back")
+        self.bridge.controllerEvent.emit("accept")
+        QTest.qWait(30)
+        self.assertEqual(self.bridge.state["page"], "home")
+        self.assertEqual(self.view.activeFocusItem().objectName(), "headerPower")
+
+    def test_power_confirmation_cancel_restores_trigger_and_preview_is_safe(self):
+        self.bridge.action("power")
+        QTest.qWait(30)
+        self.bridge.controllerEvent.emit("accept")
+        QTest.qWait(30)
+        self.assertEqual(self.bridge.state["confirm"]["action"], "poweroff")
+        self.bridge.controllerEvent.emit("back")
+        QTest.qWait(30)
+        self.assertEqual(self.view.activeFocusItem().objectName(), "quick_poweroff")
+        with patch.object(self.bridge, "_job") as job:
+            for action in ("poweroff", "reboot"):
+                self.bridge.action(action)
+                self.bridge.action("confirmed")
+                self.assertIn("Raspberry Pi", self.messages[-1][1])
+            job.assert_not_called()
+
+    def test_switching_quick_and_power_menus_keeps_original_return_page(self):
+        self.bridge.action("section", "system")
+        for action in ("menu", "power", "menu", "back"):
+            self.bridge.action(action)
+        self.assertEqual(self.bridge.state["page"], "settings")
+        self.assertEqual(self.bridge.state["section"], "system")
+
+    def test_browser_home_page_editor_validates_and_persists(self):
+        self.bridge.action("section", "system")
+        self.bridge.action("browser_home")
+        self.bridge.action("editor_save", "javascript:alert(1)")
+        self.assertTrue(self.bridge.state["editor"])
+        self.bridge.action("editor_save", "example.org")
+        from raspberry_tv.config import Settings
+        self.assertEqual(Settings(Path(self.directory.name)).data["browser"]["start_url"], "https://example.org/")
+        self.assertFalse(self.bridge.state["editor"])
+
+    def test_browser_preview_cannot_launch_type_or_send_history_commands(self):
+        with patch.object(self.bridge.apps, "launch") as launch, patch.object(self.bridge.apps, "browser_action") as control:
+            self.bridge.action("launch", "browser")
+            self.bridge._update(activeApp="browser")
+            self.bridge.action("menu")
+            self.bridge.action("browser_address")
+            self.bridge.action("editor_save", "example.org")
+            for action in ("browser_back", "browser_forward", "browser_reload"):
+                self.bridge.action(action)
+            launch.assert_not_called()
+            control.assert_not_called()
+        self.assertTrue(self.bridge.state["editor"])
+
+    def test_browser_failure_restores_address_editor_for_retry(self):
+        from raspberry_tv.processes import Unavailable
+        self.bridge._update(activeApp="browser")
+        self.bridge.action("menu")
+        self.bridge.action("browser_address")
+        with patch.object(self.bridge, "_need_pi"), patch.object(self.bridge.apps, "browser_action", side_effect=Unavailable("Окно закрылось")), \
+                patch("raspberry_tv.bridge.LOG.exception"):
+            self.bridge.action("editor_save", "example.org")
+            self.assertEqual(self.bridge.state["page"], "application")
+            for _ in range(50):
+                if not self.bridge.pending:
+                    break
+                QTest.qWait(10)
+        self.assertFalse(self.bridge.pending)
+        self.assertEqual(self.bridge.state["page"], "quick")
+        self.assertTrue(self.bridge.state["editor"])
+        self.assertEqual(self.messages[-1][1], "Окно закрылось")
+
+    def test_all_five_tiles_fit_small_screen_at_every_focus_position(self):
+        self.view.resize(1280, 720)
+        QTest.qWait(170)
+        tiles = [self.root.findChild(QObject, name) for name in ("tileKodi", "tileYoutube", "tileMoonlight", "tileBrowser", "tileSettings")]
+        for tile in tiles:
+            tile.forceActiveFocus()
+            QTest.qWait(170)
+            for candidate in tiles:
+                left = candidate.mapToScene(candidate.boundingRect().topLeft()).x()
+                right = candidate.mapToScene(candidate.boundingRect().topRight()).x()
+                self.assertGreater(left, 30)
+                self.assertLess(right, 1250)
+
+    def test_browser_menu_fits_small_screen_and_reaches_cancel(self):
+        self.view.resize(1280, 720)
+        self.bridge._update(activeApp="browser")
+        self.bridge.action("menu")
+        QTest.qWait(30)
+        for expected in ("browser_address", "browser_back", "browser_forward", "browser_reload",
+                         "minimize", "close", "section", "back"):
+            self.bridge.controllerEvent.emit("down")
+            QTest.qWait(10)
+            item = self.view.activeFocusItem()
+            self.assertEqual(item.objectName(), "quick_" + expected)
+            self.assertGreaterEqual(item.mapToScene(item.boundingRect().topLeft()).y(), 0)
+            self.assertLessEqual(item.mapToScene(item.boundingRect().bottomRight()).y(), 720)
+
+    def test_browser_address_keyboard_accepts_gamepad_keys_and_cancel_returns_to_menu(self):
+        self.bridge._update(activeApp="browser")
+        self.bridge.action("menu")
+        QTest.qWait(30)
+        self.bridge.controllerEvent.emit("down")
+        self.bridge.controllerEvent.emit("accept")
+        QTest.qWait(30)
+        field = self.root.findChild(QObject, "editorText")
+        self.assertEqual(self.view.activeFocusItem(), field)
+        self.bridge.controllerEvent.emit("down")
+        QTest.qWait(10)
+        letter = self.view.activeFocusItem().property("text")
+        self.assertEqual(len(letter), 1)
+        self.bridge.controllerEvent.emit("accept")
+        self.assertEqual(field.property("text"), letter)
+        self.bridge.controllerEvent.emit("back")
+        QTest.qWait(30)
+        self.assertEqual(field.property("text"), "")
+        self.assertEqual(self.view.activeFocusItem().objectName(), "quick_browser_address")
 
 
 if __name__ == "__main__":

@@ -16,7 +16,7 @@ def main():
     parser.add_argument("--config-dir", type=Path)
     parser.add_argument("--screenshot", type=Path)
     parser.add_argument("--control", choices=["home", "menu", "power"], help="Control the running shell")
-    parser.add_argument("--screen", choices=["home", "devices", "display", "network", "zapret", "system", "quick"], default="home")
+    parser.add_argument("--screen", choices=["home", "devices", "display", "network", "zapret", "system", "quick", "power"], default="home")
     args = parser.parse_args()
     preview = args.preview or sys.platform != "linux" or bool(args.screenshot)
     if not preview and (os.geteuid() == 0 or os.environ.get("XDG_SESSION_TYPE") == "wayland"):
@@ -125,10 +125,12 @@ def main():
         reader = InputReader(bridge.settings.data["controller"], bridge.controllerEvent.emit, bridge.controllerStatus.emit)
         reader.start()
     surface("home")
-    if args.screen not in ("home", "quick"):
+    if args.screen not in ("home", "quick", "power"):
         bridge.action("section", args.screen)
     elif args.screen == "quick":
         bridge.action("menu")
+    elif args.screen == "power":
+        bridge.action("power")
     class CloseFilter(QObject):
         def eventFilter(self, watched, event):
             if event.type() == QEvent.Close:

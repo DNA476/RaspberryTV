@@ -10,13 +10,13 @@ import subprocess
 from PySide6.QtCore import QObject, Property, QTimer, Signal, Slot
 
 from . import __version__
-from .config import Settings, DEFAULTS, PROFILES, normalize_domains
+from .config import Settings, DEFAULTS, PROFILES, normalize_domains, normalize_url
 from .linux import LinuxSystem
 from .processes import Applications, Unavailable, run
 from . import zapret
 
 LOG = logging.getLogger(__name__)
-TITLES = {"kodi": "Kodi", "youtube": "YouTube", "moonlight": "Moonlight"}
+TITLES = {"kodi": "Kodi", "youtube": "YouTube", "moonlight": "Moonlight", "browser": "Браузер"}
 SECTIONS = {"devices": "Устройства", "display": "Экран", "network": "Сеть",
             "zapret": "Сетевые правила", "system": "Система"}
 
@@ -32,7 +32,8 @@ class Bridge(QObject):
     notice = Signal(str, str)
     navigation = Signal(str)
     surface = Signal(str)
-    completed = Signal(object, object, object)
+    surfaceChanging = Signal()
+    completed = Signal(object, object, object, object)
     controllerEvent = Signal(str)
     controllerStatus = Signal(str)
 
@@ -79,10 +80,11 @@ class Bridge(QObject):
             self.rowsChanged.emit()
 
     def _page(self, page):
+        self.surfaceChanging.emit()
         self._update(page=page)
         self.surface.emit(page)
 
-    def _job(self, function, callback=lambda value: None, busy=True):
+    def _job(self, function, callback=lambda value: None, busy=True, on_error=None):
         if self.pending:
             if busy:
                 self.notice.emit("Секунду", "Дождись завершения текущего действия")
@@ -93,18 +95,20 @@ class Bridge(QObject):
 
         def work():
             try:
-                self.completed.emit(callback, function(), None)
+                self.completed.emit(callback, function(), None, on_error)
             except Exception as exc:
                 LOG.exception("System action failed")
-                self.completed.emit(callback, None, exc)
+                self.completed.emit(callback, None, exc, on_error)
         self.pool.submit(work)
         return True
 
-    @Slot(object, object, object)
-    def _complete(self, callback, result, error):
+    @Slot(object, object, object, object)
+    def _complete(self, callback, result, error, on_error):
         self.pending = False
         self._update(busy=False)
         if error:
+            if on_error:
+                on_error()
             message = str(error) if isinstance(error, (Unavailable, ValueError)) else "Не удалось выполнить действие. Попробуй ещё раз"
             self.notice.emit("Не получилось", message)
             return
@@ -179,10 +183,13 @@ class Bridge(QObject):
             else:
                 self._page("home")
         elif action in ("menu", "power"):
+            if self._state["editor"] or self._state["confirm"] or self._state["countdown"]:
+                return
             if self._state["page"] == ("quick" if action == "menu" else "power"):
                 self._page(self._return_page)
             else:
-                self._return_page = self._state["page"]
+                if self._state["page"] not in ("quick", "power"):
+                    self._return_page = self._state["page"]
                 self._page("quick" if action == "menu" else "power")
         elif action == "launch":
             if value == "settings":
@@ -196,9 +203,18 @@ class Bridge(QObject):
                 self._update(activeApp=value, running=list(self.apps.running))
                 self._page("application")
             def launch():
-                self.apps.launch(value)
+                self.apps.launch(value, self.settings.data["browser"]["start_url"] if value == "browser" else None)
                 self.apps.wait_ready(value)
             self._job(launch, launched)
+        elif action == "browser_address":
+            if self._state["activeApp"] != "browser":
+                raise Unavailable("Сначала открой браузер")
+            self._edit("Открыть сайт", "Адрес сайта · откроется в новой вкладке", action, "", submit="Открыть")
+        elif action == "browser_home":
+            self._edit("Стартовая страница браузера", "Открывается при новом запуске браузера", action,
+                       self.settings.data["browser"]["start_url"])
+        elif action in ("browser_back", "browser_forward", "browser_reload"):
+            self._browser_action(action.removeprefix("browser_"))
         elif action == "resume":
             if self.apps.active:
                 self._job(self.apps.resume, lambda _: self._page("application"))
@@ -216,15 +232,15 @@ class Bridge(QObject):
                        "\n".join(self.settings.data["zapret"]["domains"]), multiline=True)
         elif action == "profile":
             profiles = [*PROFILES, "Пользовательский"]
-            zapret = deepcopy(self.settings.data["zapret"])
-            zapret["profile"] = profiles[(profiles.index(zapret["profile"]) + 1) % len(profiles)]
-            if zapret["profile"] in PROFILES:
-                zapret["domains"] = PROFILES[zapret["profile"]]
-            self._saved(zapret=zapret)
+            draft = deepcopy(self.settings.data["zapret"])
+            draft["profile"] = profiles[(profiles.index(draft["profile"]) + 1) % len(profiles)]
+            if draft["profile"] in PROFILES:
+                draft["domains"] = PROFILES[draft["profile"]]
+            self._saved(zapret=draft)
         elif action in ("tcp", "udp"):
-            zapret = deepcopy(self.settings.data["zapret"])
-            zapret[action] = not zapret[action]
-            self._saved(zapret=zapret)
+            draft = deepcopy(self.settings.data["zapret"])
+            draft[action] = not draft[action]
+            self._saved(zapret=draft)
         elif action in ("strategy", "interface"):
             self._need_pi()
             key = "strategies" if action == "strategy" else "interfaces"
@@ -285,8 +301,6 @@ class Bridge(QObject):
                     self._update(countdown=0)
                     self.display_change = None
         elif action in ("reset", "reboot", "poweroff"):
-            if action != "reset":
-                self._need_pi()
             self._update(confirm={"title": {"reset": "Сбросить настройки оболочки?", "reboot": "Перезапустить приставку?",
                                            "poweroff": "Выключить приставку?"}[action],
                                   "body": "Настройки сети и данные приложений сохранятся" if action == "reset" else "Текущие приложения будут закрыты",
@@ -297,6 +311,7 @@ class Bridge(QObject):
             if confirmed == "reset":
                 self._saved(**deepcopy(DEFAULTS))
             elif confirmed in ("reboot", "poweroff"):
+                self._need_pi()
                 self._job(lambda: self.platform.power(confirmed))
             elif confirmed and confirmed.startswith("zapret_"):
                 operation = confirmed.removeprefix("zapret_")
@@ -333,10 +348,33 @@ class Bridge(QObject):
     def _edit(self, title, subtitle, action, text, **extra):
         self._update(editor=dict(title=title, subtitle=subtitle, action=action, text=text, **extra))
 
+    def _browser_action(self, action, value=""):
+        self._need_pi()
+        if self.pending:
+            raise Unavailable("Дождись завершения текущего действия")
+        previous_page = self._state["page"]
+        editor = self._state["editor"]
+        def finished(_):
+            if self._state["editor"] is editor:
+                self._update(editor={})
+        def failed():
+            if self._state["page"] == "application":
+                self._page(previous_page)
+        # Remove the always-on-top menu before the worker activates Chromium.
+        self._page("application")
+        self._job(lambda: self.apps.browser_action(action, value),
+                  finished, on_error=failed)
+
     def _save_editor(self, value):
         editor = self._state["editor"]
         target = editor.get("action")
-        if target in ("domains", "strategy", "interface"):
+        if target == "browser_address":
+            url = normalize_url(value)
+            self._browser_action("address", url)
+            return
+        elif target == "browser_home":
+            self._saved(browser={"start_url": normalize_url(value)})
+        elif target in ("domains", "strategy", "interface"):
             zapret = deepcopy(self.settings.data["zapret"])
             zapret[target] = normalize_domains(value) if target == "domains" else value.strip()
             if target == "domains":
@@ -406,6 +444,7 @@ class Bridge(QObject):
                 rows.insert(0, row("Состояние сети", runtime["error_message"], enabled=False))
         else:
             rows = [row("Raspberry TV", f"Версия {__version__} · " + ("предпросмотр" if self.preview else "Raspberry Pi"), enabled=False),
+                    row("Стартовая страница браузера", settings["browser"]["start_url"], "browser_home"),
                     row("Обновления", "Канал обновлений ещё не настроен", enabled=False),
                     row("Перезапустить", "Перезапустить приставку", "reboot"),
                     row("Выключить", "Безопасное завершение работы", "poweroff"),
@@ -429,8 +468,10 @@ class Bridge(QObject):
         if action in ("home", "menu", "power"):
             self.action(action)
         elif self._state["page"] == "application":
-            if self.apps.active == "youtube":
+            if self.apps.active in ("youtube", "browser"):
                 key = {"accept": "Return", "back": "Escape", "up": "Up", "down": "Down", "left": "Left", "right": "Right"}.get(action)
+                if self.apps.active == "browser" and action in ("left", "right"):
+                    key = "shift+Tab" if action == "left" else "Tab"
                 if key:
                     self._job(lambda: run(["xdotool", "key", "--clearmodifiers", key]), busy=False)
         else:

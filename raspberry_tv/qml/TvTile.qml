@@ -8,7 +8,7 @@ AbstractButton {
     property bool running: false
     activeFocusOnTab: true
     hoverEnabled: true
-    width: (activeFocus ? 346 : 330) * unit
+    width: (activeFocus ? 272 : 256) * unit
     height: 246 * unit
     scale: activeFocus ? 1.025 : 1
     Behavior on width { NumberAnimation { duration: 140; easing.type: Easing.OutCubic } }

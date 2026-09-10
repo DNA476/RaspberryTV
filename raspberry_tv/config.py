@@ -7,12 +7,14 @@ import os
 from pathlib import Path
 import re
 import tempfile
+from urllib.parse import quote, urlsplit, urlunsplit
 
 
 DEFAULTS = {
     "version": 1,
     "scale": "normal",
     "cec": True,
+    "browser": {"start_url": "https://www.google.com/"},
     "controller": {"home": 316, "menu": 315, "accept": 304, "back": 305},
     "zapret": {"profile": "YouTube", "domains": ["youtube.com", "googlevideo.com", "ytimg.com"],
                "strategy": "general.bat", "interface": "", "tcp": False, "udp": False, "backend": "nftables"},
@@ -21,6 +23,39 @@ PROFILES = {
     "YouTube": ["youtube.com", "googlevideo.com", "ytimg.com"],
     "Discord": ["discord.com", "discord.gg", "discordapp.com", "discordapp.net", "discord.media"],
 }
+
+
+def normalize_url(value: str) -> str:
+    """Accept web addresses only; never interpret an address as a command or file."""
+    if not isinstance(value, str):
+        raise ValueError("Нужен адрес сайта")
+    value = value.strip()
+    if not value or len(value) > 4096 or any(c.isspace() or ord(c) < 32 or ord(c) == 127 for c in value) or "\\" in value:
+        raise ValueError("Введи адрес сайта без пробелов")
+    if "://" not in value:
+        # Permit host:port, but not javascript:, data:, file: or Chromium switches.
+        if re.match(r"^[a-zA-Z][a-zA-Z0-9+.-]*:", value) and not re.match(r"^[^/:]+:\d+(?:[/#?]|$)", value):
+            raise ValueError("Поддерживаются только адреса http:// и https://")
+        value = "https://" + value
+    try:
+        parts = urlsplit(value)
+        host = parts.hostname
+        port = parts.port
+        if parts.scheme not in ("http", "https") or not host or parts.username is not None or parts.password is not None:
+            raise ValueError
+        if ":" in host:
+            host = "[" + str(ipaddress.IPv6Address(host)) + "]"
+        else:
+            host = host.encode("idna").decode("ascii").lower()
+            if len(host) > 253 or any(not re.fullmatch(r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?", label)
+                                      for label in host.rstrip(".").split(".")):
+                raise ValueError
+        return urlunsplit((parts.scheme, host + (f":{port}" if port is not None else ""),
+                           quote(parts.path or "/", safe="/%:@!$&'()*+,;=-._~"),
+                           quote(parts.query, safe="/?%:@!$&'()*+,;=-._~"),
+                           quote(parts.fragment, safe="/?%:@!$&'()*+,;=-._~")))
+    except (ValueError, UnicodeError) as exc:
+        raise ValueError("Нужен корректный http:// или https:// адрес без логина и пароля") from exc
 
 
 def normalize_domains(text: str) -> list[str]:
@@ -66,6 +101,7 @@ def validate(data: dict) -> dict:
         raise ValueError("Некорректный размер интерфейса")
     if not isinstance(merged["cec"], bool):
         raise ValueError("Некорректная настройка HDMI-CEC")
+    merged["browser"]["start_url"] = normalize_url(merged["browser"]["start_url"])
     mappings = merged["controller"]
     if any(type(v) is not int or not 0 <= v <= 767 for v in mappings.values()) or len(set(mappings.values())) != 4:
         raise ValueError("Кнопки контроллера должны быть разными")

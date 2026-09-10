@@ -36,6 +36,13 @@ Canvas {
             c.globalCompositeOperation = "destination-out"
             c.beginPath(); c.arc(68, 33, 36, 0, Math.PI * 2); c.fill()
             c.globalCompositeOperation = "source-over"
+        } else if (name === "browser") {
+            c.lineWidth = 4
+            c.beginPath(); c.arc(50, 50, 38, 0, Math.PI * 2); c.stroke()
+            c.beginPath(); c.ellipse(32, 12, 36, 76); c.stroke()
+            line([[12, 50], [88, 50]], false, false)
+            line([[20, 29], [80, 29]], false, false)
+            line([[20, 71], [80, 71]], false, false)
         } else if (name === "wifi") {
             for (let r of [34, 23, 12]) {
                 c.beginPath(); c.arc(50, 72, r, Math.PI * 1.23, Math.PI * 1.77); c.stroke()

@@ -17,10 +17,14 @@ FocusScope {
     ]
     property var descriptions: {
         "kodi": "Твоя медиатека. На большом экране.", "youtube": "Любимые каналы. Новые открытия.",
-        "moonlight": "Игры с твоего компьютера — на телевизоре.", "settings": "Всё под твоим контролем."
+        "moonlight": "Игры с твоего компьютера — на телевизоре.", "browser": "Сайты и поиск. На большом экране.",
+        "settings": "Всё под твоим контролем."
     }
     property string lastInput: "Нажми кнопку на контроллере"
     property var rememberedRow: null
+    property var pageFocus: ({})
+    property var editorReturnFocus: null
+    property var confirmReturnFocus: null
     focus: true
 
     function candidates(item, list) {
@@ -37,6 +41,9 @@ FocusScope {
     }
     function firstFocus() {
         let items = []; candidates(navigationScope(), items)
+        if (!s.editor.title && !s.confirm.title && !s.countdown && items.indexOf(pageFocus[s.page]) >= 0) {
+            pageFocus[s.page].forceActiveFocus(); return
+        }
         if (navigationScope() === body) {
             if (s.page === "home") {
                 let tile = items.find(item => item.appId === root.selectedApp)
@@ -47,6 +54,11 @@ FocusScope {
             }
         }
         if (items.length) items[0].forceActiveFocus()
+    }
+    function restoreFocus(item) {
+        let items = []; candidates(navigationScope(), items)
+        if (items.indexOf(item) >= 0) item.forceActiveFocus()
+        else firstFocus()
     }
     function moveFocus(direction) {
         let items = []; candidates(navigationScope(), items)
@@ -83,7 +95,8 @@ FocusScope {
         else if (action === "back") backend.action("back", "")
         else if (action === "accept") {
             let current = root.Window.window.activeFocusItem
-            if (current && current.clicked) current.clicked()
+            let items = []; candidates(navigationScope(), items)
+            if (current && current.enabled && items.indexOf(current) >= 0 && current.clicked) current.clicked()
         }
     }
     Keys.priority: Keys.AfterItem
@@ -100,6 +113,10 @@ FocusScope {
     Connections {
         target: backend
         function onNavigation(action) { root.input(action) }
+        function onSurfaceChanging() {
+            if (!root.s.editor.title && !root.s.confirm.title && !root.s.countdown)
+                root.pageFocus[root.s.page] = root.Window.window.activeFocusItem
+        }
         function onSurface(page) { Qt.callLater(root.firstFocus) }
         function onRowsChanging() {
             const item = root.Window.window.activeFocusItem
@@ -156,11 +173,11 @@ FocusScope {
                 Icon { name: "wifi"; ink: root.s.wifi ? "white" : "#949494"; width: 31 * root.u; height: width; anchors.verticalCenter: parent.verticalCenter }
                 Icon { name: "bluetooth"; ink: root.s.bluetooth ? "white" : "#949494"; width: 25 * root.u; height: width; anchors.verticalCenter: parent.verticalCenter }
                 TvButton {
-                    objectName: "headerSettings"
+                    objectName: "headerPower"
                     unit: root.u; width: 53 * root.u; height: width; padding: 12 * root.u; horizontalPadding: 12 * root.u
-                    Accessible.name: "Настройки"
-                    contentItem: Icon { name: "settings"; ink: parent.activeFocus ? "black" : "white" }
-                    onClicked: backend.action("section", "devices")
+                    Accessible.name: "Питание"
+                    contentItem: Icon { name: "power"; ink: parent.activeFocus ? "black" : "white" }
+                    onClicked: backend.action("power", "")
                 }
             }
         }
@@ -187,6 +204,7 @@ FocusScope {
                 TvTile { id: kodiTile; objectName: "tileKodi"; appId: "kodi"; text: "Kodi"; unit: root.u; running: root.s.running.indexOf(appId) >= 0; onClicked: backend.action("launch", appId); onActiveFocusChanged: if (activeFocus) root.selectedApp = appId }
                 TvTile { objectName: "tileYoutube"; appId: "youtube"; text: "YouTube"; unit: root.u; running: root.s.running.indexOf(appId) >= 0; onClicked: backend.action("launch", appId); onActiveFocusChanged: if (activeFocus) root.selectedApp = appId }
                 TvTile { objectName: "tileMoonlight"; appId: "moonlight"; text: "Moonlight"; unit: root.u; running: root.s.running.indexOf(appId) >= 0; onClicked: backend.action("launch", appId); onActiveFocusChanged: if (activeFocus) root.selectedApp = appId }
+                TvTile { objectName: "tileBrowser"; appId: "browser"; text: "Браузер"; unit: root.u; running: root.s.running.indexOf(appId) >= 0; onClicked: backend.action("launch", appId); onActiveFocusChanged: if (activeFocus) root.selectedApp = appId }
                 TvTile { objectName: "tileSettings"; appId: "settings"; text: "Настройки"; unit: root.u; onClicked: backend.action("launch", appId); onActiveFocusChanged: if (activeFocus) root.selectedApp = appId }
             }
             Text {
@@ -331,15 +349,26 @@ FocusScope {
             spacing: 16 * root.u
             Text { text: root.s.page === "power" ? "Питание" : "Быстрые действия"; color: "white"; font.pixelSize: 31 * root.u; bottomPadding: 18 * root.u }
             Repeater {
-                model: root.s.page === "power" ? [{title: "Перезапустить", action: "reboot"}, {title: "Выключить", action: "poweroff"}, {title: "Отмена", action: "back"}] :
-                    [{title: "На главный экран", action: "home"}, {title: "Сменить приложение", action: "home"}, {title: "Свернуть", action: "minimize"}, {title: "Закрыть", action: "close"}, {title: "Настройки", action: "section"}, {title: "Отмена", action: "back"}]
+                model: root.s.page === "power" ? [{title: "Выключить", action: "poweroff"}, {title: "Перезагрузить", action: "reboot"},
+                    {title: "Спящий режим · недоступен", action: "suspend"}, {title: "Отмена", action: "back"}] :
+                    [{title: "На главный экран", action: "home"}].concat(root.s.activeApp === "browser" ?
+                    [{title: "Открыть адрес", action: "browser_address"}, {title: "Назад по истории", action: "browser_back"},
+                     {title: "Вперёд по истории", action: "browser_forward"}, {title: "Обновить страницу", action: "browser_reload"}] : []).concat(
+                    [{title: "Свернуть", action: "minimize"}, {title: "Закрыть", action: "close"}, {title: "Настройки", action: "section"}, {title: "Отмена", action: "back"}])
                 TvButton {
                     required property var modelData
+                    objectName: "quick_" + modelData.action
                     unit: root.u; width: quickColumn.width
                     text: modelData.title
-                    enabled: ["close", "minimize"].indexOf(modelData.action) < 0 || !!root.s.activeApp
+                    enabled: modelData.action !== "suspend" && (["close", "minimize"].indexOf(modelData.action) < 0 || !!root.s.activeApp)
                     onClicked: backend.action(modelData.action, modelData.action === "section" ? "devices" : "")
                 }
+            }
+            Text {
+                visible: root.s.page === "power"
+                width: parent.width; wrapMode: Text.WordWrap
+                text: "Сон и пробуждение на этой приставке ещё не проверены."
+                color: "#949494"; font.pixelSize: 19 * root.u
             }
         }
     }
@@ -348,8 +377,14 @@ FocusScope {
         anchors.fill: parent; color: "#cc000000"
         visible: !!root.s.editor.title
         onVisibleChanged: {
-            if (visible) { editorText.text = root.s.editor.text || ""; Qt.callLater(function() { if (root.s.editor.secret) passwordText.forceActiveFocus(); else editorText.forceActiveFocus() }) }
-            else Qt.callLater(root.firstFocus)
+            if (visible) {
+                root.editorReturnFocus = root.Window.window.activeFocusItem
+                editorText.text = root.s.editor.text || ""
+                Qt.callLater(function() { if (root.s.editor.secret) passwordText.forceActiveFocus(); else editorText.forceActiveFocus() })
+            } else {
+                editorText.text = ""; passwordText.text = ""
+                Qt.callLater(function() { root.restoreFocus(root.editorReturnFocus) })
+            }
         }
         Rectangle {
             id: editorPanel
@@ -417,7 +452,7 @@ FocusScope {
                     TvButton { unit: root.u; text: "Aa"; onClicked: keyboard.shifted = !keyboard.shifted }
                     TvButton { unit: root.u; text: "Пробел"; onClicked: { let f = root.s.editor.secret ? passwordText : editorText; f.insert(f.cursorPosition, " ") } }
                     TvButton { unit: root.u; text: "Стереть"; onClicked: { let f = root.s.editor.secret ? passwordText : editorText; if (f.cursorPosition) f.remove(f.cursorPosition - 1, f.cursorPosition) } }
-                    TvButton { unit: root.u; text: "Сохранить"; accent: true; onClicked: backend.action("editor_save", root.s.editor.secret ? passwordText.text : editorText.text) }
+                    TvButton { objectName: "editorSubmit"; unit: root.u; text: root.s.editor.submit || "Сохранить"; accent: true; onClicked: backend.action("editor_save", root.s.editor.secret ? passwordText.text : editorText.text) }
                     TvButton { unit: root.u; text: "Отмена"; onClicked: backend.action("back", "") }
                 }
             }
@@ -427,7 +462,10 @@ FocusScope {
     Rectangle {
         visible: !!root.s.confirm.title
         anchors.fill: parent; color: "#cc000000"
-        onVisibleChanged: if (visible) Qt.callLater(root.firstFocus)
+        onVisibleChanged: {
+            if (visible) { root.confirmReturnFocus = root.Window.window.activeFocusItem; Qt.callLater(root.firstFocus) }
+            else Qt.callLater(function() { root.restoreFocus(root.confirmReturnFocus) })
+        }
         Rectangle {
             id: confirmPanel
             anchors.centerIn: parent; width: 920 * root.u; height: 320 * root.u
